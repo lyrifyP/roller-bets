@@ -383,7 +383,7 @@ export default function RollerBetsTracker() {
           <div className="grid grid-cols-1 md:grid-cols-8 gap-3">
             <div className="md:col-span-2">
               <label className="text-xs opacity-80">Status</label>
-              <select className={select} value={filter.status} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFilter(f => ({ ...f, status: e.target.value as BetStatus | "All" }))}))}>
+              <select className={select} value={filter.status} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFilter(f => ({ ...f, status: e.target.value as BetStatus | "All" }))}>
                 <option>All</option>
                 <option>Pending</option>
                 <option>Won</option>
@@ -392,7 +392,7 @@ export default function RollerBetsTracker() {
             </div>
             <div className="md:col-span-2">
               <label className="text-xs opacity-80">Sport</label>
-              <select className={select} value={filter.sport} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFilter(f => ({ ...f, sport: e.target.value as Sport | "All" }))}))}>
+              <select className={select} value={filter.sport} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFilter(f => ({ ...f, sport: e.target.value as Sport | "All" }))}>
                 <option>All</option>
                 <option>Football</option>
                 <option>Cricket</option>
