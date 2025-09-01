@@ -1,4 +1,4 @@
-'use client'
+"use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
@@ -32,9 +32,9 @@ const percentFmt = new Intl.NumberFormat("en-GB", { style: "percent", minimumFra
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-function parseNum(n: any, fallback = 0) {
+function parseNum(n: unknown, fallback = 0) {
   const x = typeof n === "string" ? n.trim() : n;
-  const v = Number(x);
+  const v = typeof x === "number" ? x : Number(x);
   return Number.isFinite(v) ? v : fallback;
 }
 
@@ -137,7 +137,7 @@ export default function RollerBetsTracker() {
 
   useEffect(() => { localStorage.setItem("rb.bets", JSON.stringify(bets)); }, [bets]);
   useEffect(() => { localStorage.setItem("rb.state", JSON.stringify(state)); document.documentElement.classList.toggle("dark", state.theme === "dark"); }, [state]);
-  useEffect(() => { document.documentElement.classList.toggle("dark", state.theme === "dark"); }, []);
+  
 
   // Derived metrics
   const totals = useMemo(() => {
@@ -154,13 +154,9 @@ export default function RollerBetsTracker() {
   const cumulative = useMemo(() => {
     const settled = bets.filter(b => isSettled(b.status)).slice().sort((a, b) => a.date.localeCompare(b.date));
     let running = 0;
-    const points: { date: string; value: number }[] = [];
-    let lastDate = "";
-    for (const b of settled) {
+    const points: { date: string; value: number }[] = [];    for (const b of settled) {
       const ret = effectiveReturn(b) ?? 0;
-      running += ret - b.stake;
-      lastDate = b.date;
-      points.push({ date: b.date, value: +running.toFixed(2) });
+      running += ret - b.stake;      points.push({ date: b.date, value: +running.toFixed(2) });
     }
     // also push zero at the start so the line begins at zero
     if (points.length) points.unshift({ date: points[0].date, value: 0 });
@@ -387,7 +383,7 @@ export default function RollerBetsTracker() {
           <div className="grid grid-cols-1 md:grid-cols-8 gap-3">
             <div className="md:col-span-2">
               <label className="text-xs opacity-80">Status</label>
-              <select className={select} value={filter.status} onChange={e => setFilter(f => ({ ...f, status: e.target.value as any }))}>
+              <select className={select} value={filter.status} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFilter(f => ({ ...f, status: e.target.value as BetStatus | "All" }))}))}>
                 <option>All</option>
                 <option>Pending</option>
                 <option>Won</option>
@@ -396,7 +392,7 @@ export default function RollerBetsTracker() {
             </div>
             <div className="md:col-span-2">
               <label className="text-xs opacity-80">Sport</label>
-              <select className={select} value={filter.sport} onChange={e => setFilter(f => ({ ...f, sport: e.target.value as any }))}>
+              <select className={select} value={filter.sport} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFilter(f => ({ ...f, sport: e.target.value as Sport | "All" }))}))}>
                 <option>All</option>
                 <option>Football</option>
                 <option>Cricket</option>
