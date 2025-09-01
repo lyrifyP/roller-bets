@@ -112,31 +112,53 @@ function LineChart({ points, height = 180 }: { points: { x: number; y: number; l
 // -------- Main Component --------
 export default function RollerBetsTracker() {
   // App state
-  const [state, setState] = useState<AppState>(() => {
-    const raw = localStorage.getItem("rb.state");
-    if (raw) {
-      try { return JSON.parse(raw) as AppState; } catch {}
-    }
-    return { targetProfit: 100, startingBankroll: 5, theme: "dark" };
-  });
+  const [state, setState] = useState<AppState>({ targetProfit: 100, startingBankroll: 5, theme: "dark" });
+  const [bets, setBets] = useState<Bet[]>([]);
+  const [isClient, setIsClient] = useState(false);
 
-  const [bets, setBets] = useState<Bet[]>(() => {
-    const raw = localStorage.getItem("rb.bets");
-    if (raw) {
-      try { return JSON.parse(raw) as Bet[]; } catch {}
+  // Initialize client-side data
+  useEffect(() => {
+    setIsClient(true);
+    
+    // Load state from localStorage
+    const rawState = localStorage.getItem("rb.state");
+    if (rawState) {
+      try { 
+        const parsedState = JSON.parse(rawState) as AppState;
+        setState(parsedState);
+      } catch {}
     }
-    // seed two examples on first run
-    return [
-      { id: uid(), date: toISODateInput(), description: "Chelsea BTTS", sport: "Football", stake: 5, oddsDecimal: 1.53, status: "Lost", returnOverride: 0, settledAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-      { id: uid(), date: toISODateInput(), description: "ATP match winner", sport: "Tennis", stake: 10, oddsDecimal: 2.1, status: "Pending", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-    ];
-  });
+    
+    // Load bets from localStorage
+    const rawBets = localStorage.getItem("rb.bets");
+    if (rawBets) {
+      try { 
+        const parsedBets = JSON.parse(rawBets) as Bet[];
+        setBets(parsedBets);
+      } catch {}
+    } else {
+      // seed two examples on first run
+      setBets([
+        { id: uid(), date: toISODateInput(), description: "Chelsea BTTS", sport: "Football", stake: 5, oddsDecimal: 1.53, status: "Lost", returnOverride: 0, settledAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+        { id: uid(), date: toISODateInput(), description: "ATP match winner", sport: "Tennis", stake: 10, oddsDecimal: 2.1, status: "Pending", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      ]);
+    }
+  }, []);
 
   const [lastDeleted, setLastDeleted] = useState<Bet | null>(null);
   const undoTimer = useRef<number | null>(null);
 
-  useEffect(() => { localStorage.setItem("rb.bets", JSON.stringify(bets)); }, [bets]);
-  useEffect(() => { localStorage.setItem("rb.state", JSON.stringify(state)); document.documentElement.classList.toggle("dark", state.theme === "dark"); }, [state]);
+  useEffect(() => { 
+    if (isClient) {
+      localStorage.setItem("rb.bets", JSON.stringify(bets)); 
+    }
+  }, [bets, isClient]);
+  useEffect(() => { 
+    if (isClient) {
+      localStorage.setItem("rb.state", JSON.stringify(state)); 
+      document.documentElement.classList.toggle("dark", state.theme === "dark"); 
+    }
+  }, [state, isClient]);
   
 
   // Derived metrics
@@ -201,12 +223,14 @@ export default function RollerBetsTracker() {
 
   const searchRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
+    if (!isClient) return;
+    
     function onKey(e: KeyboardEvent) {
       if (e.key === "/") { e.preventDefault(); searchRef.current?.focus(); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [isClient]);
 
   const filteredBets = bets.filter(b => {
     if (filter.sport !== "All" && b.sport !== filter.sport) return false;
@@ -252,15 +276,17 @@ export default function RollerBetsTracker() {
     const toDelete = bets.find(b => b.id === id) || null;
     setBets(list => list.filter(b => b.id !== id));
     setLastDeleted(toDelete);
-    if (undoTimer.current) window.clearTimeout(undoTimer.current);
-    undoTimer.current = window.setTimeout(() => setLastDeleted(null), 10000);
+    if (undoTimer.current && isClient) window.clearTimeout(undoTimer.current);
+    if (isClient) {
+      undoTimer.current = window.setTimeout(() => setLastDeleted(null), 10000);
+    }
   }
 
   function undoDelete() {
     if (!lastDeleted) return;
     setBets(list => [lastDeleted, ...list]);
     setLastDeleted(null);
-    if (undoTimer.current) window.clearTimeout(undoTimer.current);
+    if (undoTimer.current && isClient) window.clearTimeout(undoTimer.current);
   }
 
   // Layout helpers
@@ -272,6 +298,13 @@ export default function RollerBetsTracker() {
 
   return (
     <div className={state.theme === "dark" ? "min-h-screen bg-slate-950 text-slate-100" : "min-h-screen bg-slate-50 text-slate-900"}>
+      {!isClient ? (
+        <div className="max-w-6xl mx-auto px-4 py-6">
+          <div className="text-center py-12">
+            <div className="text-lg">Loading...</div>
+          </div>
+        </div>
+      ) : (
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between gap-3">
@@ -511,6 +544,7 @@ export default function RollerBetsTracker() {
 
         <footer className="text-center text-xs opacity-60 pt-4 pb-2">Made for quick rollers. Data is saved only in your browser.</footer>
       </div>
+      )}
     </div>
   );
 }
