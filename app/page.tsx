@@ -168,7 +168,7 @@ export default function RollerBetsTracker() {
     const totalReturned = +settled.reduce((s, b) => s + (effectiveReturn(b) ?? 0), 0).toFixed(2);
     const profit = +(totalReturned - settled.reduce((s, b) => s + b.stake, 0)).toFixed(2);
     const winRate = settled.length ? (settled.filter(b => b.status === "Won").length / settled.length) : 0;
-    const progress = state.targetProfit > 0 ? clamp01(profit / state.targetProfit) : 0;
+    const progress = state.targetProfit > 0 ? clamp01(totalReturned / state.targetProfit) : 0;
     return { totalStaked, totalReturned, profit, winRate, progress };
   }, [bets, state.targetProfit]);
 
@@ -376,7 +376,7 @@ export default function RollerBetsTracker() {
           <div className={card}>
             <div className="text-xs opacity-80 mb-1">Target Profit (£)</div>
             <input className={input} type="number" step="1" min="1" value={state.targetProfit} onChange={e => setState(s => ({ ...s, targetProfit: Math.max(1, parseNum(e.target.value, 100)) }))} />
-            <p className="text-xs mt-2 opacity-70">Progress uses net profit. Adjust this to set your goal.</p>
+            <p className="text-xs mt-2 opacity-70">Progress tracks total returns. Adjust this to set your goal.</p>
           </div>
           <div className={card}>
             <div className="text-xs opacity-80 mb-1">Starting Bankroll (£)</div>
@@ -388,7 +388,7 @@ export default function RollerBetsTracker() {
             <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
               <div className="h-full bg-indigo-500" style={{ width: `${totals.progress * 100}%` }} />
             </div>
-            <div className="text-sm mt-2 opacity-80">{currency.format(Math.max(0, totals.profit))} of {currency.format(state.targetProfit)}</div>
+            <div className="text-sm mt-2 opacity-80">{currency.format(totals.totalReturned)} of {currency.format(state.targetProfit)}</div>
           </div>
         </div>
 
