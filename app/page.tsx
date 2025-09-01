@@ -6,11 +6,15 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 type Sport = "Football" | "Cricket" | "Tennis" | "Other";
 type BetStatus = "Pending" | "Won" | "Lost";
 
+type FootballCategory = "Goals" | "Corners" | "Result" | "Double Chance" | "Other";
+type FootballCategoryKey = FootballCategory | "Uncategorised";
+
 type Bet = {
   id: string;
   date: string; // yyyy-mm-dd
   description: string;
   sport: Sport;
+  category?: FootballCategory;
   stake: number; // GBP
   oddsDecimal: number;
   status: BetStatus;
@@ -146,6 +150,7 @@ export default function RollerBetsTracker() {
   }, []);
 
   const [lastDeleted, setLastDeleted] = useState<Bet | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const undoTimer = useRef<number | null>(null);
 
   useEffect(() => { 
@@ -190,8 +195,8 @@ export default function RollerBetsTracker() {
   }, [cumulative]);
 
   // -------- Add form --------
-  const [form, setForm] = useState<{ date: string; description: string; sport: Sport; stake: string; oddsDecimal: string; status: BetStatus; returnOverride?: string }>({
-    date: toISODateInput(), description: "", sport: "Football", stake: "5", oddsDecimal: "1.50", status: "Pending",
+  const [form, setForm] = useState<{ date: string; description: string; sport: Sport; category?: FootballCategory; stake: string; oddsDecimal: string; status: BetStatus; returnOverride?: string }>({
+    date: toISODateInput(), description: "", sport: "Football", category: "Result", stake: "5", oddsDecimal: "1.50", status: "Pending",
   });
 
   const addDisabled = !form.description.trim() || parseNum(form.stake) <= 0 || parseNum(form.oddsDecimal) <= 1;
@@ -204,6 +209,7 @@ export default function RollerBetsTracker() {
       date: form.date,
       description: form.description.trim(),
       sport: form.sport,
+      category: form.sport === "Football" ? form.category : undefined,
       stake: +parseNum(form.stake).toFixed(2),
       oddsDecimal: +parseNum(form.oddsDecimal).toFixed(3),
       status: form.status,
@@ -217,41 +223,50 @@ export default function RollerBetsTracker() {
   }
 
   // -------- Filters --------
-  const [filter, setFilter] = useState<{ sport: Sport | "All"; status: BetStatus | "All"; from?: string; to?: string; search: string }>({
-    sport: "All", status: "All", search: "",
+  const [filter, setFilter] = useState<{ sport: Sport | "All"; status: BetStatus | "All"; from?: string; to?: string }>({
+    sport: "All", status: "All",
   });
-
-  const searchRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (!isClient) return;
-    
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "/") { e.preventDefault(); searchRef.current?.focus(); }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [isClient]);
 
   const filteredBets = bets.filter(b => {
     if (filter.sport !== "All" && b.sport !== filter.sport) return false;
     if (filter.status !== "All" && b.status !== filter.status) return false;
     if (filter.from && b.date < filter.from) return false;
     if (filter.to && b.date > filter.to) return false;
-    if (filter.search.trim()) {
-      const q = filter.search.toLowerCase();
-      const text = `${b.description} ${b.sport} ${b.status}`.toLowerCase();
-      if (!text.includes(q)) return false;
-    }
     return true;
   }).sort((a, b) => b.date.localeCompare(a.date));
 
+  const footballCategoryStats = useMemo(() => {
+    const fb = filteredBets.filter(b => b.sport === "Football");
+    type Stat = { bets: number; settled: number; stakedSettled: number; returned: number; wins: number };
+    const map = new Map<FootballCategoryKey, Stat>();
+    for (const b of fb) {
+      const key = (b.category ?? "Uncategorised") as FootballCategoryKey;
+      const cur = map.get(key) ?? { bets: 0, settled: 0, stakedSettled: 0, returned: 0, wins: 0 };
+      cur.bets += 1;
+      if (isSettled(b.status)) {
+        cur.settled += 1;
+        cur.stakedSettled += b.stake;
+        cur.returned += effectiveReturn(b) ?? 0;
+        if (b.status === "Won") cur.wins += 1;
+      }
+      map.set(key, cur);
+    }
+    const rows = Array.from(map.entries()).map(([category, m]) => {
+      const profit = +(m.returned - m.stakedSettled).toFixed(2);
+      const roi = m.stakedSettled > 0 ? profit / m.stakedSettled : 0;
+      const winRate = m.settled > 0 ? m.wins / m.settled : 0;
+      return { category, bets: m.bets, settled: m.settled, staked: +m.stakedSettled.toFixed(2), returned: +m.returned.toFixed(2), profit, roi, winRate };
+    }).sort((a, b) => b.profit - a.profit);
+    return rows;
+  }, [filteredBets]);
+
   // -------- Editing --------
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editVals, setEditVals] = useState<{ stake: string; oddsDecimal: string; status: BetStatus; returnOverride?: string }>({ stake: "", oddsDecimal: "", status: "Pending" });
+  const [editVals, setEditVals] = useState<{ stake: string; oddsDecimal: string; status: BetStatus; category?: FootballCategory; returnOverride?: string }>({ stake: "", oddsDecimal: "", status: "Pending" });
 
   function beginEdit(bet: Bet) {
     setEditingId(bet.id);
-    setEditVals({ stake: String(bet.stake), oddsDecimal: String(bet.oddsDecimal), status: bet.status, returnOverride: bet.returnOverride !== undefined ? String(bet.returnOverride) : undefined });
+    setEditVals({ stake: String(bet.stake), oddsDecimal: String(bet.oddsDecimal), status: bet.status, category: bet.category, returnOverride: bet.returnOverride !== undefined ? String(bet.returnOverride) : undefined });
   }
 
   function saveEdit(id: string) {
@@ -264,6 +279,7 @@ export default function RollerBetsTracker() {
         stake: +parseNum(editVals.stake).toFixed(2),
         oddsDecimal: +parseNum(editVals.oddsDecimal).toFixed(3),
         status: nextStatus,
+        category: b.sport === "Football" ? editVals.category : undefined,
         returnOverride: editVals.returnOverride !== undefined && editVals.returnOverride !== "" ? +parseNum(editVals.returnOverride).toFixed(2) : undefined,
         settledAt: isSettled(b.status) || isSettled(nextStatus) ? now : undefined,
         updatedAt: now,
@@ -289,6 +305,30 @@ export default function RollerBetsTracker() {
     if (undoTimer.current && isClient) window.clearTimeout(undoTimer.current);
   }
 
+  function copySummary() {
+    const lines = [
+      "Roller Bets summary",
+      `Total staked: ${currency.format(totals.totalStaked)}`,
+      `Total returned: ${currency.format(totals.totalReturned)}`,
+      `Profit: ${currency.format(totals.profit)}`,
+      `Win rate: ${percentFmt.format(totals.winRate)}`,
+      `Goal progress: ${percentFmt.format(totals.progress)} (${currency.format(totals.totalReturned)} of ${currency.format(state.targetProfit)})`,
+      "",
+      "Recent bets:",
+      ...bets.slice(0, 3).map(b => `${b.date} ${b.description} ${b.sport} Stake ${currency.format(b.stake)} Odds ${b.oddsDecimal.toFixed(2)} Status ${b.status} Return ${effectiveReturn(b) == null ? "N/A" : currency.format(effectiveReturn(b) as number)}`)
+    ];
+    const text = lines.join("\n");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(() => setToast("Summary copied to clipboard"))
+        .catch(() => setToast("Copy failed, select and copy manually"));
+      window.setTimeout(() => setToast(null), 2000);
+    } else {
+      setToast("Copy not supported, select and copy manually");
+      window.setTimeout(() => setToast(null), 2000);
+    }
+  }
+
   // Layout helpers
   const card = "rounded-2xl p-4 bg-slate-900/60 border border-slate-800 shadow-lg";
   const input = "w-full rounded-xl bg-slate-900/50 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500";
@@ -307,51 +347,57 @@ export default function RollerBetsTracker() {
       ) : (
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Roller Bets Tracker</h1>
-            <p className="text-sm opacity-70">Local only, fast entry, clean stats.</p>
+            <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Roller Bets Tracker</h1>
+            <p className="text-xs sm:text-sm opacity-70">Local only, fast entry, clean stats.</p>
           </div>
-          <div className="flex items-center gap-2">
-            <button className={btnGhost} onClick={() => setState(s => ({ ...s, theme: s.theme === "dark" ? "light" : "dark" }))}>
-              {state.theme === "dark" ? "Light" : "Dark"} mode
-            </button>
-            <button className={btnGhost} onClick={() => {
-              const blob = new Blob([JSON.stringify({ state, bets }, null, 2)], { type: "application/json" });
-              const a = document.createElement("a");
-              a.href = URL.createObjectURL(blob);
-              a.download = `roller-bets-export-${Date.now()}.json`;
-              a.click();
-            }}>Export JSON</button>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="flex-1 sm:flex-none inline-flex rounded-xl border border-slate-700 overflow-hidden">
+              {(["All","Pending","Won","Lost"]).map((s) => (
+                <button key={s} type="button" className={`flex-1 sm:flex-none px-2 sm:px-3 py-2 text-xs sm:text-sm ${filter.status === s ? "bg-slate-700" : "bg-slate-800/60 hover:bg-slate-700/60"}`} onClick={() => setFilter(f => ({ ...f, status: s as BetStatus | "All" }))}>
+                  {s}
+                </button>
+              ))}
+            </div>
+            <button className={btnGhost + " text-xs sm:text-sm"} type="button" onClick={copySummary}>Copy</button>
           </div>
         </div>
 
         {/* Add form, mobile first on top */}
         <div className={card}>
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-            <div className="md:col-span-2">
+          <div className="grid grid-cols-2 md:grid-cols-12 gap-3 items-end">
+            <div className="col-span-2 md:col-span-2">
               <label className="text-xs opacity-80">Date</label>
               <input className={input} type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
             </div>
-            <div className="md:col-span-4">
+            <div className="col-span-2 md:col-span-4">
               <label className="text-xs opacity-80">Bet</label>
-              <input className={input} placeholder="Example, Villa race to 9 corners" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+              <input className={input} placeholder="Villa race to 9 corners" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
             </div>
-            <div className="md:col-span-2">
+            <div className="col-span-1 md:col-span-2">
               <label className="text-xs opacity-80">Sport</label>
               <select className={select} value={form.sport} onChange={e => setForm(f => ({ ...f, sport: e.target.value as Sport }))}>
                 {(["Football", "Cricket", "Tennis", "Other"] as Sport[]).map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            <div className="md:col-span-1">
-              <label className="text-xs opacity-80">Stake (£)</label>
+            {form.sport === "Football" && (
+              <div className="col-span-1 md:col-span-2">
+                <label className="text-xs opacity-80">Category</label>
+                <select className={select} value={form.category ?? "Result"} onChange={e => setForm(f => ({ ...f, category: e.target.value as FootballCategory }))}>
+                  {(["Result","Double Chance","Goals","Corners","Other"] as FootballCategory[]).map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="col-span-1 md:col-span-1">
+              <label className="text-xs opacity-80">Stake</label>
               <input className={input} type="number" step="0.01" min="0" value={form.stake} onChange={e => setForm(f => ({ ...f, stake: e.target.value }))} />
             </div>
-            <div className="md:col-span-1">
+            <div className="col-span-1 md:col-span-1">
               <label className="text-xs opacity-80">Odds</label>
               <input className={input} type="number" step="0.01" min="1.01" value={form.oddsDecimal} onChange={e => setForm(f => ({ ...f, oddsDecimal: e.target.value }))} />
             </div>
-            <div className="md:col-span-2">
+            <div className="col-span-1 md:col-span-2">
               <label className="text-xs opacity-80">Status</label>
               <select className={select} value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as BetStatus }))}>
                 {(["Pending", "Won", "Lost"] as BetStatus[]).map(s => <option key={s} value={s}>{s}</option>)}
@@ -359,13 +405,13 @@ export default function RollerBetsTracker() {
             </div>
 
             {(form.status === "Won" || form.status === "Lost") && (
-              <div className="md:col-span-2">
+              <div className="col-span-2 md:col-span-2">
                 <label className="text-xs opacity-80">Return override (£)</label>
                 <input className={input} type="number" step="0.01" min="0" value={form.returnOverride ?? ""} onChange={e => setForm(f => ({ ...f, returnOverride: e.target.value }))} placeholder="optional" />
               </div>
             )}
 
-            <div className="md:col-span-1 flex justify-end">
+            <div className="col-span-2 md:col-span-1 flex justify-end">
               <button className={btn + " w-full md:w-auto"} disabled={addDisabled} onClick={addBet}>Add</button>
             </div>
           </div>
@@ -376,7 +422,7 @@ export default function RollerBetsTracker() {
           <div className={card}>
             <div className="text-xs opacity-80 mb-1">Target Profit (£)</div>
             <input className={input} type="number" step="1" min="1" value={state.targetProfit} onChange={e => setState(s => ({ ...s, targetProfit: Math.max(1, parseNum(e.target.value, 100)) }))} />
-            <p className="text-xs mt-2 opacity-70">Progress tracks total returns. Adjust this to set your goal.</p>
+            <p className="text-xs mt-2 opacity-70">Progress uses total returned. Adjust this to set your goal.</p>
           </div>
           <div className={card}>
             <div className="text-xs opacity-80 mb-1">Starting Bankroll (£)</div>
@@ -393,11 +439,11 @@ export default function RollerBetsTracker() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className={card}><div className="text-xs opacity-80">Total Staked</div><div className="text-2xl font-semibold">{currency.format(totals.totalStaked)}</div></div>
-          <div className={card}><div className="text-xs opacity-80">Total Returned</div><div className="text-2xl font-semibold">{currency.format(totals.totalReturned)}</div></div>
-          <div className={card}><div className="text-xs opacity-80">Profit</div><div className={"text-2xl font-semibold " + (totals.profit >= 0 ? "text-emerald-400" : "text-rose-400")}>{currency.format(totals.profit)}</div></div>
-          <div className={card}><div className="text-xs opacity-80">Win Rate</div><div className="text-2xl font-semibold">{percentFmt.format(totals.winRate)}</div></div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          <div className={card}><div className="text-xs opacity-80">Total Staked</div><div className="text-lg sm:text-2xl font-semibold">{currency.format(totals.totalStaked)}</div></div>
+          <div className={card}><div className="text-xs opacity-80">Total Returned</div><div className="text-lg sm:text-2xl font-semibold">{currency.format(totals.totalReturned)}</div></div>
+          <div className={card}><div className="text-xs opacity-80">Profit</div><div className={"text-lg sm:text-2xl font-semibold " + (totals.profit >= 0 ? "text-emerald-400" : "text-rose-400")}>{currency.format(totals.profit)}</div></div>
+          <div className={card}><div className="text-xs opacity-80">Win Rate</div><div className="text-lg sm:text-2xl font-semibold">{percentFmt.format(totals.winRate)}</div></div>
         </div>
 
         {/* Chart */}
@@ -411,10 +457,49 @@ export default function RollerBetsTracker() {
           </div>
         </div>
 
+        <div className={card}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-sm opacity-80">Football categories performance</div>
+            <div className="text-xs opacity-60">based on current filters</div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-slate-300 border-b border-slate-800">
+                <tr>
+                  <th className="py-2 pr-3">Category</th>
+                  <th className="py-2 pr-3">Bets</th>
+                  <th className="py-2 pr-3">Settled</th>
+                  <th className="py-2 pr-3">Staked</th>
+                  <th className="py-2 pr-3">Returned</th>
+                  <th className="py-2 pr-3">Profit</th>
+                  <th className="py-2 pr-3">ROI</th>
+                  <th className="py-2 pr-3">Win rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {footballCategoryStats.length === 0 ? (
+                  <tr><td colSpan={8} className="py-4 text-center text-slate-400">No football bets yet</td></tr>
+                ) : footballCategoryStats.map(row => (
+                  <tr key={row.category as string} className="border-b border-slate-800/80">
+                    <td className="py-2 pr-3">{row.category}</td>
+                    <td className="py-2 pr-3">{row.bets}</td>
+                    <td className="py-2 pr-3">{row.settled}</td>
+                    <td className="py-2 pr-3">{currency.format(row.staked)}</td>
+                    <td className="py-2 pr-3">{currency.format(row.returned)}</td>
+                    <td className={"py-2 pr-3 " + (row.profit >= 0 ? "text-emerald-400" : "text-rose-400")}>{currency.format(row.profit)}</td>
+                    <td className="py-2 pr-3">{percentFmt.format(row.roi)}</td>
+                    <td className="py-2 pr-3">{percentFmt.format(row.winRate)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         {/* Filters */}
         <div className={card}>
-          <div className="grid grid-cols-1 md:grid-cols-8 gap-3">
-            <div className="md:col-span-2">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+            <div className="col-span-1 md:col-span-1">
               <label className="text-xs opacity-80">Status</label>
               <select className={select} value={filter.status} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFilter(f => ({ ...f, status: e.target.value as BetStatus | "All" }))}>
                 <option>All</option>
@@ -423,7 +508,7 @@ export default function RollerBetsTracker() {
                 <option>Lost</option>
               </select>
             </div>
-            <div className="md:col-span-2">
+            <div className="col-span-1 md:col-span-1">
               <label className="text-xs opacity-80">Sport</label>
               <select className={select} value={filter.sport} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFilter(f => ({ ...f, sport: e.target.value as Sport | "All" }))}>
                 <option>All</option>
@@ -433,33 +518,28 @@ export default function RollerBetsTracker() {
                 <option>Other</option>
               </select>
             </div>
-            <div className="md:col-span-2">
+            <div className="col-span-1 md:col-span-2">
               <label className="text-xs opacity-80">From</label>
               <input className={input} type="date" value={filter.from ?? ""} onChange={e => setFilter(f => ({ ...f, from: e.target.value || undefined }))} />
             </div>
-            <div className="md:col-span-2">
+            <div className="col-span-1 md:col-span-2">
               <label className="text-xs opacity-80">To</label>
               <input className={input} type="date" value={filter.to ?? ""} onChange={e => setFilter(f => ({ ...f, to: e.target.value || undefined }))} />
-            </div>
-            <div className="md:col-span-6">
-              <label className="text-xs opacity-80">Search</label>
-              <input ref={searchRef} className={input} placeholder="Find a bet" value={filter.search} onChange={e => setFilter(f => ({ ...f, search: e.target.value }))} />
-            </div>
-            <div className="md:col-span-2 flex items-end">
-              <button className={btnGhost + " w-full"} onClick={() => setFilter({ sport: "All", status: "All", search: "" })}>Clear filters</button>
             </div>
           </div>
         </div>
 
         {/* Table */}
         <div className={card}>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto -mx-4 sm:mx-0">
+            <div className="min-w-[800px] sm:min-w-0">
+              <table className="w-full text-xs sm:text-sm">
               <thead className="text-left text-slate-300 border-b border-slate-800 sticky top-0 bg-slate-900/60">
                 <tr>
                   <th className="py-2 pr-3">Date</th>
                   <th className="py-2 pr-3">Bet</th>
                   <th className="py-2 pr-3">Sport</th>
+                  <th className="py-2 pr-3">Category</th>
                   <th className="py-2 pr-3">Stake</th>
                   <th className="py-2 pr-3">Odds</th>
                   <th className="py-2 pr-3">Status</th>
@@ -479,6 +559,15 @@ export default function RollerBetsTracker() {
                       <td className="py-2 pr-3 align-top whitespace-nowrap">{bet.date}</td>
                       <td className="py-2 pr-3 align-top min-w-[240px]">{bet.description}</td>
                       <td className="py-2 pr-3 align-top">{bet.sport}</td>
+                      <td className="py-2 pr-3 align-top">
+                        {isEditing && bet.sport === "Football" ? (
+                          <select className={select} value={editVals.category ?? "Result"} onChange={e => setEditVals(v => ({ ...v, category: e.target.value as FootballCategory }))}>
+                            {(["Result","Double Chance","Goals","Corners","Other"] as FootballCategory[]).map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        ) : (
+                          bet.sport === "Football" ? (bet.category ?? "Uncategorised") : "N/A"
+                        )}
+                      </td>
                       <td className="py-2 pr-3 align-top">
                         {isEditing ? (
                           <input className={input} type="number" step="0.01" min="0" value={editVals.stake} onChange={e => setEditVals(v => ({ ...v, stake: e.target.value }))} />
@@ -509,7 +598,7 @@ export default function RollerBetsTracker() {
                         {isEditing ? (
                           <input className={input} type="number" step="0.01" min="0" value={editVals.returnOverride ?? ""} onChange={e => setEditVals(v => ({ ...v, returnOverride: e.target.value }))} placeholder={defaultReturn({ ...bet, status: editVals.status })?.toString() ?? ""} />
                         ) : (
-                          ret === null ? "—" : currency.format(ret)
+                          ret === null ? "N/A" : currency.format(ret)
                         )}
                       </td>
                       <td className="py-2 pr-3 align-top text-right whitespace-nowrap">
@@ -532,6 +621,7 @@ export default function RollerBetsTracker() {
             </table>
           </div>
         </div>
+        </div>
 
         {lastDeleted && (
           <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/90 text-slate-100 border border-slate-700 rounded-xl px-4 py-3 shadow-lg">
@@ -539,6 +629,12 @@ export default function RollerBetsTracker() {
               <span className="text-sm">Bet deleted</span>
               <button className={btnGhost} onClick={undoDelete}>Undo</button>
             </div>
+          </div>
+        )}
+
+        {toast && (
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/90 text-slate-100 border border-slate-700 rounded-xl px-4 py-3 shadow-lg">
+            <span className="text-sm">{toast}</span>
           </div>
         )}
 
