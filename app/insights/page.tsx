@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
+// -------- Types --------
 type Sport = 'Football' | 'Cricket' | 'Tennis' | 'Other';
 type BetStatus = 'Pending' | 'Won' | 'Lost';
 type FootballCategory = 'Goals' | 'Corners' | 'Result' | 'Double Chance' | 'Other';
@@ -30,6 +31,7 @@ type AppState = {
   theme: 'dark' | 'light';
 };
 
+// -------- Utilities --------
 const currency = new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' });
 const percentFmt = new Intl.NumberFormat('en-GB', { style: 'percent', minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
@@ -63,7 +65,21 @@ function dayName(isoDate: string) {
   return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dt.getDay()];
 }
 
+// -------- Page wrapper with Suspense --------
 export default function InsightsPage() {
+  return (
+    <Suspense fallback={
+      <div className="max-w-6xl mx-auto px-4 py-6">
+        <div className="text-center py-12"><div className="text-lg">Loading insights…</div></div>
+      </div>
+    }>
+      <InsightsInner />
+    </Suspense>
+  );
+}
+
+// -------- Main content that uses router hooks --------
+function InsightsInner() {
   const [isClient, setIsClient] = useState(false);
   const [state, setState] = useState<AppState>({ targetProfit: 100, theme: 'dark' });
   const [bets, setBets] = useState<Bet[]>([]);
@@ -110,18 +126,20 @@ export default function InsightsPage() {
       to: qsTo || undefined,
     };
     if (next.sport !== filter.sport || next.from !== filter.from || next.to !== filter.to) setFilter(next);
-  }, [isClient, searchParams, filter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isClient, searchParams]);
 
   // Write filters to URL
   useEffect(() => {
     if (!isClient) return;
-    const params = new URLSearchParams(searchParams.toString());
-    if (filter.sport && filter.sport !== 'All') params.set('sport', filter.sport); else params.delete('sport');
-    if (filter.from) params.set('from', filter.from); else params.delete('from');
-    if (filter.to) params.set('to', filter.to); else params.delete('to');
+    const params = new URLSearchParams();
+    if (filter.sport && filter.sport !== 'All') params.set('sport', filter.sport);
+    if (filter.from) params.set('from', filter.from);
+    if (filter.to) params.set('to', filter.to);
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname);
-  }, [filter, isClient, router, pathname, searchParams]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, isClient, pathname, router]);
 
   // Apply filters to data source
   const filteredBets = useMemo(() => {
@@ -344,7 +362,7 @@ export default function InsightsPage() {
     <div className={state.theme === 'dark' ? 'min-h-screen bg-slate-950 text-slate-100' : 'min-h-screen bg-slate-50 text-slate-900'}>
       {!isClient ? (
         <div className="max-w-6xl mx-auto px-4 py-6">
-          <div className="text-center py-12"><div className="text-lg">Loading...</div></div>
+          <div className="text-center py-12"><div className="text-lg">Loading…</div></div>
         </div>
       ) : (
         <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
