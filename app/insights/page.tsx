@@ -44,13 +44,23 @@ function effectiveReturn(b: Bet): number | null {
   if (b.returnOverride !== undefined && b.returnOverride !== null) return +b.returnOverride.toFixed(2);
   return defaultReturn(b);
 }
-
-// simple median helper
 function median(nums: number[]) {
   if (nums.length === 0) return 0;
   const arr = [...nums].sort((a, b) => a - b);
   const mid = Math.floor(arr.length / 2);
   return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+}
+function endOfMonth(yyyyMm: string) {
+  const [y, m] = yyyyMm.split('-').map(Number);
+  const d = new Date(y, m, 0);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+function dayName(isoDate: string) {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dt.getDay()];
 }
 
 export default function InsightsPage() {
@@ -78,8 +88,9 @@ export default function InsightsPage() {
 
   const card = 'rounded-2xl p-4 bg-slate-900/60 border border-slate-800 shadow-lg';
   const btnGhost = 'rounded-xl px-3 py-2 text-sm font-medium bg-slate-800/60 hover:bg-slate-700/60 border border-slate-700';
+  const field = 'w-full rounded-xl bg-slate-900/50 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500';
 
-  // Global filters (sport, from, to) synced with URL
+  // Global filters synced with URL
   const [filter, setFilter] = useState<{ sport: Sport | 'All'; from?: string; to?: string }>({ sport: 'All' });
 
   // Hydrate filters from query
@@ -99,23 +110,18 @@ export default function InsightsPage() {
       to: qsTo || undefined,
     };
     if (next.sport !== filter.sport || next.from !== filter.from || next.to !== filter.to) setFilter(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isClient, searchParams]);
+  }, [isClient, searchParams, filter]);
 
   // Write filters to URL
   useEffect(() => {
     if (!isClient) return;
     const params = new URLSearchParams(searchParams.toString());
-    if (filter.sport && filter.sport !== 'All') params.set('sport', filter.sport);
-    else params.delete('sport');
-    if (filter.from) params.set('from', filter.from);
-    else params.delete('from');
-    if (filter.to) params.set('to', filter.to);
-    else params.delete('to');
+    if (filter.sport && filter.sport !== 'All') params.set('sport', filter.sport); else params.delete('sport');
+    if (filter.from) params.set('from', filter.from); else params.delete('from');
+    if (filter.to) params.set('to', filter.to); else params.delete('to');
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, isClient]);
+  }, [filter, isClient, router, pathname, searchParams]);
 
   // Apply filters to data source
   const filteredBets = useMemo(() => {
@@ -173,7 +179,7 @@ export default function InsightsPage() {
     const m = new Map<string, { staked: number; returned: number; profit: number }>();
     for (const b of filteredBets) {
       if (!isSettled(b.status)) continue;
-      const key = b.date.slice(0, 7); // yyyy-mm
+      const key = b.date.slice(0, 7);
       const ret = effectiveReturn(b) ?? 0;
       const cur = m.get(key) ?? { staked: 0, returned: 0, profit: 0 };
       cur.staked += b.stake;
@@ -288,8 +294,7 @@ export default function InsightsPage() {
     const map = new Map<string, Stat>();
     for (const b of filteredBets) {
       if (!isSettled(b.status)) continue;
-      const d = new Date(b.date + 'T00:00:00');
-      const key = names[d.getDay()];
+      const key = dayName(b.date);
       const cur = map.get(key) ?? { staked: 0, returned: 0, profit: 0, settled: 0, wins: 0 };
       const ret = effectiveReturn(b) ?? 0;
       cur.settled += 1;
@@ -307,10 +312,10 @@ export default function InsightsPage() {
     }).sort((a, b) => b.profit - a.profit);
   }, [filteredBets]);
 
-  // CSV export for analysis elsewhere
+  // CSV export for analysis elsewhere, respects current filters
   function exportCSV() {
     const header = ['date', 'description', 'sport', 'category', 'stake', 'oddsDecimal', 'status', 'return', 'profit'];
-    const rows = bets.map(b => {
+    const rows = filteredBets.map(b => {
       const ret = effectiveReturn(b);
       const profit = isSettled(b.status) ? ((ret ?? 0) - b.stake).toFixed(2) : '';
       return [
@@ -333,6 +338,8 @@ export default function InsightsPage() {
     a.click();
   }
 
+  const hasActiveFilter = filter.sport !== 'All' || filter.from || filter.to;
+
   return (
     <div className={state.theme === 'dark' ? 'min-h-screen bg-slate-950 text-slate-100' : 'min-h-screen bg-slate-50 text-slate-900'}>
       {!isClient ? (
@@ -345,7 +352,13 @@ export default function InsightsPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Insights</h1>
-              <p className="text-xs sm:text-sm opacity-70">Deeper stats by month, sport, category, odds bands, weekday.</p>
+              <p className="text-xs sm:text-sm opacity-70">Stats by month, sport, category, odds bands, weekday.</p>
+              {hasActiveFilter && (
+                <p className="text-xs opacity-60 mt-1">
+                  Showing {filter.sport !== 'All' ? `${filter.sport}` : 'All sports'}
+                  {filter.from ? ` from ${filter.from}` : ''}{filter.to ? ` to ${filter.to}` : ''}
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <Link
@@ -370,17 +383,17 @@ export default function InsightsPage() {
             <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
               <div className="col-span-1 md:col-span-1">
                 <label className="text-xs opacity-80">Sport</label>
-                <select className={btnGhost} value={filter.sport} onChange={e => setFilter(f => ({ ...f, sport: e.target.value as Sport | 'All' }))}>
+                <select className={field} value={filter.sport} onChange={e => setFilter(f => ({ ...f, sport: e.target.value as Sport | 'All' }))}>
                   {(['All','Football','Cricket','Tennis','Other'] as const).map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
               <div className="col-span-1 md:col-span-2">
                 <label className="text-xs opacity-80">From</label>
-                <input className={btnGhost} type="date" value={filter.from ?? ''} onChange={e => setFilter(f => ({ ...f, from: e.target.value || undefined }))} />
+                <input className={field} type="date" value={filter.from ?? ''} onChange={e => setFilter(f => ({ ...f, from: e.target.value || undefined }))} />
               </div>
               <div className="col-span-1 md:col-span-2">
                 <label className="text-xs opacity-80">To</label>
-                <input className={btnGhost} type="date" value={filter.to ?? ''} onChange={e => setFilter(f => ({ ...f, to: e.target.value || undefined }))} />
+                <input className={field} type="date" value={filter.to ?? ''} onChange={e => setFilter(f => ({ ...f, to: e.target.value || undefined }))} />
               </div>
               <div className="col-span-2 md:col-span-1 flex justify-end">
                 <button className={btnGhost + ' w-full'} onClick={() => setFilter({ sport: 'All' })}>Clear</button>
@@ -391,14 +404,14 @@ export default function InsightsPage() {
           {/* Key metrics */}
           <div className={card}>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 sm:gap-4">
-              <Metric label="Avg odds" value={metrics.avgOdds.toFixed(2)} />
-              <Metric label="Avg stake" value={currency.format(metrics.avgStake)} />
-              <Metric label="Median stake" value={currency.format(metrics.medStake)} />
-              <Metric label="Profit per bet" value={currency.format(metrics.profitPerBet)} posNeg />
-              <Metric label="ROI" value={percentFmt.format(metrics.roi)} />
-              <Metric label="Hit rate" value={percentFmt.format(metrics.hitRate)} />
-              <Metric label="Pending stake" value={currency.format(metrics.pendingStake)} />
-              <Metric label="Pending potential" value={currency.format(metrics.pendingPotentialReturn)} />
+              <Metric label="Avg odds" val={metrics.avgOdds.toFixed(2)} />
+              <Metric label="Avg stake" val={currency.format(metrics.avgStake)} />
+              <Metric label="Median stake" val={currency.format(metrics.medStake)} />
+              <Metric label="Profit per bet" val={currency.format(metrics.profitPerBet)} num={metrics.profitPerBet} posNeg />
+              <Metric label="ROI" val={percentFmt.format(metrics.roi)} />
+              <Metric label="Hit rate" val={percentFmt.format(metrics.hitRate)} />
+              <Metric label="Pending stake" val={currency.format(metrics.pendingStake)} />
+              <Metric label="Pending potential" val={currency.format(metrics.pendingPotentialReturn)} />
             </div>
           </div>
 
@@ -422,7 +435,12 @@ export default function InsightsPage() {
                   {monthly.length === 0 ? (
                     <tr><td colSpan={4} className="py-4 text-center text-slate-400">No settled bets yet</td></tr>
                   ) : monthly.map(r => (
-                    <tr key={r.month} className="border-b border-slate-800/80">
+                    <tr
+                      key={r.month}
+                      className="border-b border-slate-800/80 cursor-pointer"
+                      onClick={() => setFilter(f => ({ ...f, from: `${r.month}-01`, to: endOfMonth(r.month) }))}
+                      title="Filter to this month"
+                    >
                       <td className="py-2 pr-3">{r.month}</td>
                       <td className="py-2 pr-3 text-right tabular-nums">{currency.format(r.staked)}</td>
                       <td className="py-2 pr-3 text-right tabular-nums">{currency.format(r.returned)}</td>
@@ -596,14 +614,14 @@ export default function InsightsPage() {
     </div>
   );
 
-  function Metric({ label, value, posNeg = false }: { label: string; value: string; posNeg?: boolean }) {
-    const isNeg = posNeg && value.startsWith('-');
-    const isPos = posNeg && !value.startsWith('-') && value !== '£0.00';
+  function Metric({ label, val, num, posNeg = false }: { label: string; val: string; num?: number; posNeg?: boolean }) {
+    const isNeg = posNeg && (num ?? 0) < 0;
+    const isPos = posNeg && (num ?? 0) > 0;
     return (
       <div className="rounded-xl p-3 bg-slate-900/40 border border-slate-800">
         <div className="text-xs opacity-70">{label}</div>
         <div className={'text-lg font-semibold tabular-nums ' + (isPos ? 'text-emerald-400' : isNeg ? 'text-rose-400' : '')}>
-          {value}
+          {val}
         </div>
       </div>
     );
