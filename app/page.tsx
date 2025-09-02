@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import Link from 'next/link';
 
 // -------- Types --------
 type Sport = "Football" | "Cricket" | "Tennis" | "Other";
@@ -407,7 +408,8 @@ export default function RollerBetsTracker() {
                 </button>
               ))}
             </div>
-            <a href="/insights" className={btnGhost + " text-xs sm:text-sm"}>Insights</a>
+            <Link href="/insights" className={btnGhost + " text-xs sm:text-sm"}>
+  Insights </Link>
             <button className={btnGhost + " text-xs sm:text-sm"} type="button" onClick={copySummary}>Copy</button>
           </div>
         </div>
