@@ -2,10 +2,10 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 type Sport = 'Football' | 'Cricket' | 'Tennis' | 'Other';
 type BetStatus = 'Pending' | 'Won' | 'Lost';
-
 type FootballCategory = 'Goals' | 'Corners' | 'Result' | 'Double Chance' | 'Other';
 type FootballCategoryKey = FootballCategory | 'Uncategorised';
 
@@ -45,52 +45,21 @@ function effectiveReturn(b: Bet): number | null {
   return defaultReturn(b);
 }
 
-// Small bar chart with plain SVG
-function BarChart({
-  data,
-  height = 180,
-}: {
-  data: { label: string; value: number }[];
-  height?: number;
-}) {
-  const padding = 16;
-  const width = 720;
-  const innerW = width - padding * 2;
-  const innerH = height - padding * 2;
-  if (!data.length) return <div className="h-[180px] flex items-center justify-center text-sm text-slate-400">No data yet</div>;
-  const maxAbs = Math.max(1, ...data.map(d => Math.abs(d.value)));
-  const barW = innerW / data.length;
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-[180px]">
-      {/* zero line */}
-      <line
-        x1={padding}
-        x2={width - padding}
-        y1={padding + innerH / 2}
-        y2={padding + innerH / 2}
-        stroke="currentColor"
-        opacity={0.2}
-      />
-      {data.map((d, i) => {
-        const x = padding + i * barW + barW * 0.1;
-        const barWidth = barW * 0.8;
-        const scaled = (Math.abs(d.value) / maxAbs) * (innerH / 2);
-        const y = d.value >= 0 ? padding + innerH / 2 - scaled : padding + innerH / 2;
-        return (
-          <g key={d.label}>
-            <rect x={x} y={y} width={barWidth} height={scaled} fill="currentColor" opacity={d.value >= 0 ? 0.9 : 0.6} />
-          </g>
-        );
-      })}
-    </svg>
-  );
+// simple median helper
+function median(nums: number[]) {
+  if (nums.length === 0) return 0;
+  const arr = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(arr.length / 2);
+  return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
 }
 
 export default function InsightsPage() {
   const [isClient, setIsClient] = useState(false);
   const [state, setState] = useState<AppState>({ targetProfit: 100, theme: 'dark' });
   const [bets, setBets] = useState<Bet[]>([]);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
     setIsClient(true);
@@ -110,10 +79,99 @@ export default function InsightsPage() {
   const card = 'rounded-2xl p-4 bg-slate-900/60 border border-slate-800 shadow-lg';
   const btnGhost = 'rounded-xl px-3 py-2 text-sm font-medium bg-slate-800/60 hover:bg-slate-700/60 border border-slate-700';
 
+  // Global filters (sport, from, to) synced with URL
+  const [filter, setFilter] = useState<{ sport: Sport | 'All'; from?: string; to?: string }>({ sport: 'All' });
+
+  // Hydrate filters from query
+  useEffect(() => {
+    if (!isClient) return;
+    const qsSport = searchParams.get('sport');
+    const qsFrom = searchParams.get('from');
+    const qsTo = searchParams.get('to');
+    const next: { sport: Sport | 'All'; from?: string; to?: string } = {
+      sport:
+        qsSport === 'Football' || qsSport === 'Cricket' || qsSport === 'Tennis' || qsSport === 'Other'
+          ? qsSport
+          : qsSport === 'All'
+          ? 'All'
+          : filter.sport,
+      from: qsFrom || undefined,
+      to: qsTo || undefined,
+    };
+    if (next.sport !== filter.sport || next.from !== filter.from || next.to !== filter.to) setFilter(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isClient, searchParams]);
+
+  // Write filters to URL
+  useEffect(() => {
+    if (!isClient) return;
+    const params = new URLSearchParams(searchParams.toString());
+    if (filter.sport && filter.sport !== 'All') params.set('sport', filter.sport);
+    else params.delete('sport');
+    if (filter.from) params.set('from', filter.from);
+    else params.delete('from');
+    if (filter.to) params.set('to', filter.to);
+    else params.delete('to');
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, isClient]);
+
+  // Apply filters to data source
+  const filteredBets = useMemo(() => {
+    return bets.filter(b => {
+      if (filter.sport !== 'All' && b.sport !== filter.sport) return false;
+      if (filter.from && b.date < filter.from) return false;
+      if (filter.to && b.date > filter.to) return false;
+      return true;
+    });
+  }, [bets, filter]);
+
+  // Key metrics
+  const metrics = useMemo(() => {
+    const settled = filteredBets.filter(b => isSettled(b.status));
+    const pending = filteredBets.filter(b => b.status === 'Pending');
+
+    const stakedAll = +filteredBets.reduce((s, b) => s + b.stake, 0).toFixed(2);
+    const stakedSettled = +settled.reduce((s, b) => s + b.stake, 0).toFixed(2);
+    const returned = +settled.reduce((s, b) => s + (effectiveReturn(b) ?? 0), 0).toFixed(2);
+    const profit = +(returned - stakedSettled).toFixed(2);
+
+    const wins = settled.filter(b => b.status === 'Won').length;
+    const hitRate = settled.length ? wins / settled.length : 0;
+    const roi = stakedSettled > 0 ? profit / stakedSettled : 0;
+
+    const avgOdds = settled.length ? +(settled.reduce((s, b) => s + b.oddsDecimal, 0) / settled.length).toFixed(2) : 0;
+    const avgStake = filteredBets.length ? +(filteredBets.reduce((s, b) => s + b.stake, 0) / filteredBets.length).toFixed(2) : 0;
+    const medStake = +median(filteredBets.map(b => b.stake)).toFixed(2);
+    const profitPerBet = settled.length ? +(profit / settled.length).toFixed(2) : 0;
+
+    const pendingStake = +pending.reduce((s, b) => s + b.stake, 0).toFixed(2);
+    const pendingPotentialReturn = +pending.reduce((s, b) => s + b.stake * b.oddsDecimal, 0).toFixed(2);
+
+    return {
+      totalBets: filteredBets.length,
+      settled: settled.length,
+      pending: pending.length,
+      stakedAll,
+      stakedSettled,
+      returned,
+      profit,
+      hitRate,
+      roi,
+      avgOdds,
+      avgStake,
+      medStake,
+      profitPerBet,
+      pendingStake,
+      pendingPotentialReturn,
+    };
+  }, [filteredBets]);
+
   // Monthly PnL from settled bets
   const monthly = useMemo(() => {
     const m = new Map<string, { staked: number; returned: number; profit: number }>();
-    for (const b of bets) {
+    for (const b of filteredBets) {
       if (!isSettled(b.status)) continue;
       const key = b.date.slice(0, 7); // yyyy-mm
       const ret = effectiveReturn(b) ?? 0;
@@ -132,12 +190,12 @@ export default function InsightsPage() {
       }))
       .sort((a, b) => a.month.localeCompare(b.month));
     return rows;
-  }, [bets]);
+  }, [filteredBets]);
 
   // Sport breakdown
   const bySport = useMemo(() => {
     const m = new Map<Sport, { staked: number; returned: number; profit: number; settled: number; wins: number }>();
-    for (const b of bets) {
+    for (const b of filteredBets) {
       const cur = m.get(b.sport) ?? { staked: 0, returned: 0, profit: 0, settled: 0, wins: 0 };
       if (isSettled(b.status)) {
         const ret = effectiveReturn(b) ?? 0;
@@ -158,11 +216,11 @@ export default function InsightsPage() {
         winRate: v.settled > 0 ? v.wins / v.settled : 0,
       }))
       .sort((a, b) => b.profit - a.profit);
-  }, [bets]);
+  }, [filteredBets]);
 
   // Football categories
   const byCategory = useMemo(() => {
-    const fb = bets.filter(b => b.sport === 'Football');
+    const fb = filteredBets.filter(b => b.sport === 'Football');
     type Stat = { staked: number; returned: number; profit: number; settled: number; wins: number };
     const m = new Map<FootballCategoryKey, Stat>();
     for (const b of fb) {
@@ -187,23 +245,71 @@ export default function InsightsPage() {
         winRate: v.settled > 0 ? v.wins / v.settled : 0,
       }))
       .sort((a, b) => b.profit - a.profit);
-  }, [bets]);
+  }, [filteredBets]);
 
-  const monthlyBars = monthly.map(r => ({ label: r.month, value: r.profit }));
+  // Odds bands calibration, settled only
+  const oddsBands = useMemo(() => {
+    const bands = [
+      { label: '1.01 to 1.49', min: 1.01, max: 1.49 },
+      { label: '1.50 to 1.99', min: 1.5, max: 1.99 },
+      { label: '2.00 to 2.99', min: 2, max: 2.99 },
+      { label: '3.00 to 4.99', min: 3, max: 4.99 },
+      { label: '5.00 or more', min: 5, max: Infinity },
+    ] as const;
+
+    const settled = filteredBets.filter(b => isSettled(b.status));
+    type Row = { band: string; bets: number; wins: number; avgOdds: number; implied: number; winRate: number; roi: number; profit: number };
+    const rows: Row[] = [];
+
+    for (const band of bands) {
+      const inBand = settled.filter(b => b.oddsDecimal >= band.min && b.oddsDecimal <= band.max);
+      const bets = inBand.length;
+      if (!bets) {
+        rows.push({ band: band.label, bets: 0, wins: 0, avgOdds: 0, implied: 0, winRate: 0, roi: 0, profit: 0 });
+        continue;
+      }
+      const wins = inBand.filter(b => b.status === 'Won').length;
+      const avgOdds = inBand.reduce((s, b) => s + b.oddsDecimal, 0) / bets;
+      const implied = 1 / avgOdds;
+      const winRate = wins / bets;
+      const staked = inBand.reduce((s, b) => s + b.stake, 0);
+      const returned = inBand.reduce((s, b) => s + (effectiveReturn(b) ?? 0), 0);
+      const profit = +(returned - staked).toFixed(2);
+      const roi = staked > 0 ? profit / staked : 0;
+      rows.push({ band: band.label, bets, wins, avgOdds, implied, winRate, roi, profit });
+    }
+    return rows;
+  }, [filteredBets]);
+
+  // Weekday performance, settled only
+  const byWeekday = useMemo(() => {
+    const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    type Stat = { staked: number; returned: number; profit: number; settled: number; wins: number };
+    const map = new Map<string, Stat>();
+    for (const b of filteredBets) {
+      if (!isSettled(b.status)) continue;
+      const d = new Date(b.date + 'T00:00:00');
+      const key = names[d.getDay()];
+      const cur = map.get(key) ?? { staked: 0, returned: 0, profit: 0, settled: 0, wins: 0 };
+      const ret = effectiveReturn(b) ?? 0;
+      cur.settled += 1;
+      cur.staked += b.stake;
+      cur.returned += ret;
+      cur.profit += ret - b.stake;
+      if (b.status === 'Won') cur.wins += 1;
+      map.set(key, cur);
+    }
+    return names.map(day => {
+      const v = map.get(day) ?? { staked: 0, returned: 0, profit: 0, settled: 0, wins: 0 };
+      const winRate = v.settled > 0 ? v.wins / v.settled : 0;
+      const roi = v.staked > 0 ? v.profit / v.staked : 0;
+      return { day, staked: +v.staked.toFixed(2), returned: +v.returned.toFixed(2), profit: +v.profit.toFixed(2), winRate, roi };
+    }).sort((a, b) => b.profit - a.profit);
+  }, [filteredBets]);
 
   // CSV export for analysis elsewhere
   function exportCSV() {
-    const header = [
-      'date',
-      'description',
-      'sport',
-      'category',
-      'stake',
-      'oddsDecimal',
-      'status',
-      'return',
-      'profit',
-    ];
+    const header = ['date', 'description', 'sport', 'category', 'stake', 'oddsDecimal', 'status', 'return', 'profit'];
     const rows = bets.map(b => {
       const ret = effectiveReturn(b);
       const profit = isSettled(b.status) ? ((ret ?? 0) - b.stake).toFixed(2) : '';
@@ -239,31 +345,77 @@ export default function InsightsPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Insights</h1>
-              <p className="text-xs sm:text-sm opacity-70">Monthly PnL, sport split, football categories.</p>
+              <p className="text-xs sm:text-sm opacity-70">Deeper stats by month, sport, category, odds bands, weekday.</p>
             </div>
             <div className="flex items-center gap-2">
-              <Link href="/" className={btnGhost}>Back to tracker</Link>
+              <Link
+                href={{
+                  pathname: '/',
+                  query: {
+                    ...(filter.sport && filter.sport !== 'All' ? { sport: filter.sport } : {}),
+                    ...(filter.from ? { from: filter.from } : {}),
+                    ...(filter.to ? { to: filter.to } : {}),
+                  },
+                }}
+                className={btnGhost}
+              >
+                Return to tracker
+              </Link>
               <button className={btnGhost} type="button" onClick={exportCSV}>Export CSV</button>
             </div>
           </div>
 
-          {/* Monthly PnL */}
+          {/* Global Filters */}
+          <div className={card}>
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+              <div className="col-span-1 md:col-span-1">
+                <label className="text-xs opacity-80">Sport</label>
+                <select className={btnGhost} value={filter.sport} onChange={e => setFilter(f => ({ ...f, sport: e.target.value as Sport | 'All' }))}>
+                  {(['All','Football','Cricket','Tennis','Other'] as const).map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div className="col-span-1 md:col-span-2">
+                <label className="text-xs opacity-80">From</label>
+                <input className={btnGhost} type="date" value={filter.from ?? ''} onChange={e => setFilter(f => ({ ...f, from: e.target.value || undefined }))} />
+              </div>
+              <div className="col-span-1 md:col-span-2">
+                <label className="text-xs opacity-80">To</label>
+                <input className={btnGhost} type="date" value={filter.to ?? ''} onChange={e => setFilter(f => ({ ...f, to: e.target.value || undefined }))} />
+              </div>
+              <div className="col-span-2 md:col-span-1 flex justify-end">
+                <button className={btnGhost + ' w-full'} onClick={() => setFilter({ sport: 'All' })}>Clear</button>
+              </div>
+            </div>
+          </div>
+
+          {/* Key metrics */}
+          <div className={card}>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 sm:gap-4">
+              <Metric label="Avg odds" value={metrics.avgOdds.toFixed(2)} />
+              <Metric label="Avg stake" value={currency.format(metrics.avgStake)} />
+              <Metric label="Median stake" value={currency.format(metrics.medStake)} />
+              <Metric label="Profit per bet" value={currency.format(metrics.profitPerBet)} posNeg />
+              <Metric label="ROI" value={percentFmt.format(metrics.roi)} />
+              <Metric label="Hit rate" value={percentFmt.format(metrics.hitRate)} />
+              <Metric label="Pending stake" value={currency.format(metrics.pendingStake)} />
+              <Metric label="Pending potential" value={currency.format(metrics.pendingPotentialReturn)} />
+            </div>
+          </div>
+
+          {/* Monthly table */}
           <div className={card}>
             <div className="flex items-center justify-between mb-2">
               <div className="text-sm opacity-80">Monthly profit</div>
               <div className="text-xs opacity-60">settled only</div>
             </div>
-            <div className="text-indigo-400">
-              <BarChart data={monthlyBars} />
-            </div>
-            <div className="overflow-x-auto mt-3">
+            <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-left text-slate-300 border-b border-slate-800">
                   <tr>
                     <th className="py-2 pr-3">Month</th>
-                    <th className="py-2 pr-3">Staked</th>
-                    <th className="py-2 pr-3">Returned</th>
-                    <th className="py-2 pr-3">Profit</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Staked</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Returned</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Profit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -272,9 +424,9 @@ export default function InsightsPage() {
                   ) : monthly.map(r => (
                     <tr key={r.month} className="border-b border-slate-800/80">
                       <td className="py-2 pr-3">{r.month}</td>
-                      <td className="py-2 pr-3">{currency.format(r.staked)}</td>
-                      <td className="py-2 pr-3">{currency.format(r.returned)}</td>
-                      <td className={'py-2 pr-3 ' + (r.profit >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
+                      <td className="py-2 pr-3 text-right tabular-nums">{currency.format(r.staked)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{currency.format(r.returned)}</td>
+                      <td className={'py-2 pr-3 text-right tabular-nums ' + (r.profit >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
                         {currency.format(r.profit)}
                       </td>
                     </tr>
@@ -284,7 +436,7 @@ export default function InsightsPage() {
             </div>
           </div>
 
-          {/* Sport breakdown */}
+          {/* Sport performance */}
           <div className={card}>
             <div className="flex items-center justify-between mb-2">
               <div className="text-sm opacity-80">Sport performance</div>
@@ -295,10 +447,10 @@ export default function InsightsPage() {
                 <thead className="text-left text-slate-300 border-b border-slate-800">
                   <tr>
                     <th className="py-2 pr-3">Sport</th>
-                    <th className="py-2 pr-3">Staked</th>
-                    <th className="py-2 pr-3">Returned</th>
-                    <th className="py-2 pr-3">Profit</th>
-                    <th className="py-2 pr-3">Win rate</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Staked</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Returned</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Profit</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Win rate</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -307,12 +459,12 @@ export default function InsightsPage() {
                   ) : bySport.map(r => (
                     <tr key={r.sport} className="border-b border-slate-800/80">
                       <td className="py-2 pr-3">{r.sport}</td>
-                      <td className="py-2 pr-3">{currency.format(r.staked)}</td>
-                      <td className="py-2 pr-3">{currency.format(r.returned)}</td>
-                      <td className={'py-2 pr-3 ' + (r.profit >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
+                      <td className="py-2 pr-3 text-right tabular-nums">{currency.format(r.staked)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{currency.format(r.returned)}</td>
+                      <td className={'py-2 pr-3 text-right tabular-nums ' + (r.profit >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
                         {currency.format(r.profit)}
                       </td>
-                      <td className="py-2 pr-3">{percentFmt.format(r.winRate)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{percentFmt.format(r.winRate)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -331,10 +483,10 @@ export default function InsightsPage() {
                 <thead className="text-left text-slate-300 border-b border-slate-800">
                   <tr>
                     <th className="py-2 pr-3">Category</th>
-                    <th className="py-2 pr-3">Staked</th>
-                    <th className="py-2 pr-3">Returned</th>
-                    <th className="py-2 pr-3">Profit</th>
-                    <th className="py-2 pr-3">Win rate</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Staked</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Returned</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Profit</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Win rate</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -343,12 +495,94 @@ export default function InsightsPage() {
                   ) : byCategory.map(r => (
                     <tr key={r.category as string} className="border-b border-slate-800/80">
                       <td className="py-2 pr-3">{r.category}</td>
-                      <td className="py-2 pr-3">{currency.format(r.staked)}</td>
-                      <td className="py-2 pr-3">{currency.format(r.returned)}</td>
-                      <td className={'py-2 pr-3 ' + (r.profit >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
+                      <td className="py-2 pr-3 text-right tabular-nums">{currency.format(r.staked)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{currency.format(r.returned)}</td>
+                      <td className={'py-2 pr-3 text-right tabular-nums ' + (r.profit >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
                         {currency.format(r.profit)}
                       </td>
-                      <td className="py-2 pr-3">{percentFmt.format(r.winRate)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{percentFmt.format(r.winRate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Odds bands calibration */}
+          <div className={card}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm opacity-80">Odds bands calibration</div>
+              <div className="text-xs opacity-60">settled only</div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-slate-300 border-b border-slate-800">
+                  <tr>
+                    <th className="py-2 pr-3">Band</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Bets</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Wins</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Avg odds</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Implied</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Win rate</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Edge</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">ROI</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Profit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {oddsBands.map(r => (
+                    <tr key={r.band} className="border-b border-slate-800/80">
+                      <td className="py-2 pr-3">{r.band}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{r.bets}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{r.wins}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{r.avgOdds ? r.avgOdds.toFixed(2) : '0.00'}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{percentFmt.format(r.implied)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{percentFmt.format(r.winRate)}</td>
+                      <td className={'py-2 pr-3 text-right tabular-nums ' + (r.winRate - r.implied >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
+                        {percentFmt.format(r.winRate - r.implied)}
+                      </td>
+                      <td className={'py-2 pr-3 text-right tabular-nums ' + (r.roi >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
+                        {percentFmt.format(r.roi)}
+                      </td>
+                      <td className={'py-2 pr-3 text-right tabular-nums ' + (r.profit >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
+                        {currency.format(r.profit)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Weekday performance */}
+          <div className={card}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm opacity-80">Weekday performance</div>
+              <div className="text-xs opacity-60">settled only</div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-slate-300 border-b border-slate-800">
+                  <tr>
+                    <th className="py-2 pr-3">Day</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Staked</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Returned</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Profit</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">Win rate</th>
+                    <th className="py-2 pr-3 text-right tabular-nums">ROI</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byWeekday.map(r => (
+                    <tr key={r.day} className="border-b border-slate-800/80">
+                      <td className="py-2 pr-3">{r.day}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{currency.format(r.staked)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{currency.format(r.returned)}</td>
+                      <td className={'py-2 pr-3 text-right tabular-nums ' + (r.profit >= 0 ? 'text-emerald-400' : 'text-rose-400')}>
+                        {currency.format(r.profit)}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{percentFmt.format(r.winRate)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{percentFmt.format(r.roi)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -361,4 +595,17 @@ export default function InsightsPage() {
       )}
     </div>
   );
+
+  function Metric({ label, value, posNeg = false }: { label: string; value: string; posNeg?: boolean }) {
+    const isNeg = posNeg && value.startsWith('-');
+    const isPos = posNeg && !value.startsWith('-') && value !== '£0.00';
+    return (
+      <div className="rounded-xl p-3 bg-slate-900/40 border border-slate-800">
+        <div className="text-xs opacity-70">{label}</div>
+        <div className={'text-lg font-semibold tabular-nums ' + (isPos ? 'text-emerald-400' : isNeg ? 'text-rose-400' : '')}>
+          {value}
+        </div>
+      </div>
+    );
+  }
 }

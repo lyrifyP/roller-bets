@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 // -------- Types --------
 type Sport = "Football" | "Cricket" | "Tennis" | "Other";
@@ -226,6 +227,52 @@ export default function RollerBetsTracker() {
   const [filter, setFilter] = useState<{ sport: Sport | "All"; status: BetStatus | "All"; from?: string; to?: string }>({
     sport: "All", status: "All",
   });
+
+  // URL sync for filters
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // Hydrate filters from URL on mount and when URL changes (e.g., back/forward)
+  useEffect(() => {
+    if (!isClient) return;
+    const qsStatus = searchParams.get("status");
+    const qsSport = searchParams.get("sport");
+    const qsFrom = searchParams.get("from");
+    const qsTo = searchParams.get("to");
+
+    const next: { sport: Sport | "All"; status: BetStatus | "All"; from?: string; to?: string } = {
+      sport: (qsSport === "Football" || qsSport === "Cricket" || qsSport === "Tennis" || qsSport === "Other") ? qsSport : (qsSport === "All" ? "All" : filter.sport),
+      status: (qsStatus === "Pending" || qsStatus === "Won" || qsStatus === "Lost" || qsStatus === "All") ? qsStatus as BetStatus | "All" : filter.status,
+      from: qsFrom || undefined,
+      to: qsTo || undefined,
+    };
+    // Only update if different
+    if (next.sport !== filter.sport || next.status !== filter.status || next.from !== filter.from || next.to !== filter.to) {
+      setFilter(next);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isClient, searchParams]);
+
+  // Write filters to URL (replace) when they change
+  useEffect(() => {
+    if (!isClient) return;
+    const params = new URLSearchParams(searchParams.toString());
+    // Apply or delete params based on defaults
+    if (filter.status && filter.status !== "All") params.set("status", filter.status);
+    else params.delete("status");
+
+    if (filter.sport && filter.sport !== "All") params.set("sport", filter.sport);
+    else params.delete("sport");
+
+    if (filter.from) params.set("from", filter.from); else params.delete("from");
+    if (filter.to) params.set("to", filter.to); else params.delete("to");
+
+    const newQs = params.toString();
+    const url = newQs ? `${pathname}?${newQs}` : pathname;
+    router.replace(url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, isClient]);
 
   const filteredBets = bets.filter(b => {
     if (filter.sport !== "All" && b.sport !== filter.sport) return false;
