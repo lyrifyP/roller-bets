@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 
 type Sport = 'Football' | 'Cricket' | 'Tennis' | 'Other';
 type BetStatus = 'Pending' | 'Won' | 'Lost';
@@ -241,7 +242,7 @@ export default function InsightsPage() {
               <p className="text-xs sm:text-sm opacity-70">Monthly PnL, sport split, football categories.</p>
             </div>
             <div className="flex items-center gap-2">
-              <a href="/" className={btnGhost}>Back to tracker</a>
+              <Link href="/" className={btnGhost}>Back to tracker</Link>
               <button className={btnGhost} type="button" onClick={exportCSV}>Export CSV</button>
             </div>
           </div>

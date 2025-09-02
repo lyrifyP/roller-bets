@@ -360,6 +360,7 @@ export default function RollerBetsTracker() {
                 </button>
               ))}
             </div>
+            <a href="/insights" className={btnGhost + " text-xs sm:text-sm"}>Insights</a>
             <button className={btnGhost + " text-xs sm:text-sm"} type="button" onClick={copySummary}>Copy</button>
           </div>
         </div>
